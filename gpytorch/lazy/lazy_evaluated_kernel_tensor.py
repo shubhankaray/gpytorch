@@ -45,12 +45,12 @@ class LazyEvaluatedKernelTensor(LazyTensor):
         return self.x1.device
 
     def _expand_batch(self, batch_shape):
-        print("expand batch evaluation")
+        # print("expand batch evaluation")
         return self.evaluate_kernel()._expand_batch(batch_shape)
 
     def _getitem(self, row_col_are_absorbed, row_index, col_index, *batch_indices):
         if row_col_are_absorbed:
-            print("getitem evaluation")
+            # print("getitem evaluation")
             return self.evaluate_kernel()._getitem(row_col_are_absorbed, row_index, col_index, *batch_indices)
 
         x1 = self.x1
@@ -132,11 +132,11 @@ class LazyEvaluatedKernelTensor(LazyTensor):
         return self.__class__(self.x2, self.x1, kernel=self.kernel, batch_dims=self.batch_dims, **self.params)
 
     def _unsqueeze_batch(self, dim):
-        print("unsqueezing batch")
+        # print("unsqueezing batch")
         return self.evaluate_kernel()._unsqueeze_batch(dim)
 
     def add_jitter(self, jitter_val=1e-3):
-        print("adding jitter")
+        # print("adding jitter")
         return self.evaluate_kernel().add_jitter(jitter_val)
 
     @cached(name="kernel_diag")
@@ -150,7 +150,7 @@ class LazyEvaluatedKernelTensor(LazyTensor):
         from ..kernels import Kernel
 
         if is_cached(self, "kernel_eval"):
-            print("\n\nWOO FREE KERNEL DIAG\n\n")
+            # print("\n\nWOO FREE KERNEL DIAG\n\n")
             return self.evaluate_kernel().diag()
         else:
             x1 = self.x1
@@ -215,7 +215,7 @@ class LazyEvaluatedKernelTensor(LazyTensor):
         NB: This is a meta LazyTensor, in the sense that evaluate can return
         a LazyTensor if the kernel being evaluated does so.
         """
-        print("> > evaluate kernel call", self.shape)
+        # print("> > evaluate kernel call", self.shape)
         with settings.lazily_evaluate_kernels(False):
             return lazify(
                 self.kernel(self.x1, self.x2, diag=False, batch_dims=self.batch_dims, **self.params)
@@ -223,7 +223,7 @@ class LazyEvaluatedKernelTensor(LazyTensor):
 
     @cached
     def evaluate(self):
-        print("evaluate evaluating kernel")
+        # print("evaluate evaluating kernel")
         return self.evaluate_kernel().evaluate()
 
     def repeat(self, *repeats):
@@ -242,7 +242,7 @@ class LazyEvaluatedKernelTensor(LazyTensor):
         # Otherwise, we'll evaluate the kernel (or at least its LazyTensor representation) and use its
         # representation
         else:
-            print("evaluating for the representation")
+            # print("evaluating for the representation")
             return self.evaluate_kernel().representation()
 
     def representation_tree(self):
@@ -252,5 +252,5 @@ class LazyEvaluatedKernelTensor(LazyTensor):
         # Otherwise, we'll evaluate the kernel (or at least its LazyTensor representation) and use its
         # representation
         else:
-            print("evaluating for the representation tree")
+            # print("evaluating for the representation tree")
             return self.evaluate_kernel().representation_tree()

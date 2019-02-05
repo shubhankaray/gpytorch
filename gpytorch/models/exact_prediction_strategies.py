@@ -509,7 +509,7 @@ class SumPredictionStrategy(DefaultPredictionStrategy):
                 precomputed_cache, test_train_covar
             )
         else:
-            print("were doing some summing...")
+            # print("were doing some summing...")
             return sum(
                 sub_strat._exact_predictive_covar_inv_quad_form_root(cache_comp, test_train_covar_comp)
                 for sub_strat, cache_comp, test_train_covar_comp in zip(
