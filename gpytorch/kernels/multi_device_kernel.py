@@ -40,6 +40,9 @@ class MultiDeviceKernel(DataParallel, Kernel):
         if diag:
             return self.module.forward(x1, x2, diag=True, **kwargs).to(self.output_device)
 
+        if x1.size(-2) < len(self.device_ids) + 1:
+            return self.module.forward(x1, x2, diag=diag, **kwargs).to(self.output_device)
+
         if not x1.device == self.__cached_x1.device or not torch.equal(x1, self.__cached_x1):
             self._x1_scattered, self._kwargs = self.scatter((x1,), kwargs, self.device_ids)
             self.__cached_x1 = x1
@@ -57,6 +60,7 @@ class MultiDeviceKernel(DataParallel, Kernel):
             return self.module.forward(*inputs[0], **self._kwargs[0])
 
         # Can't cache the replication because the base kernel module can change every time (e.g. param updates)
+        self.module.distance_module = None
         replicas = self.replicate(self.module, self.device_ids[:len(inputs)])
 
         # TODO: parallel_apply might be too heavyweight in some cases?
