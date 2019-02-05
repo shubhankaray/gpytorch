@@ -51,16 +51,16 @@ class MultiDeviceKernel(DataParallel, Kernel):
         inputs = tuple((x1_[0], x2_) for x1_, x2_ in zip(self._x1_scattered, self._x2_subs))
 
         if not self.device_ids:
-            return self.module.forward(*inputs, **self._kwargs)
+            return self.module(*inputs, **self._kwargs)
 
         if len(self.device_ids) == 1:
-            return self.module.forward(*inputs[0], **self._kwargs[0])
+            return self.module(*inputs[0], **self._kwargs[0])
 
         # Can't cache the replication because the base kernel module can change every time (e.g. param updates)
         replicas = self.replicate(self.module, self.device_ids[:len(inputs)])
 
         # TODO: parallel_apply might be too heavyweight in some cases?
-        with settings.lazily_evaluate_kernels(False):
+        with settings.lazily_evaluate_kernels(True):
             outputs = self.parallel_apply(replicas, inputs, self._kwargs)
 
         return self.gather(outputs, self.output_device)
@@ -70,3 +70,7 @@ class MultiDeviceKernel(DataParallel, Kernel):
 
     def size(self, x1, x2):
         return self.module.size(x1, x2)
+
+    def __call__(self, x1, x2=None, diag=False, batch_dims=None, **params):
+        with settings.lazily_evaluate_kernels(False):
+            Kernel.__call__(self, x1, x2, diag, batch_dims, **params)
