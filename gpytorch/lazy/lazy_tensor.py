@@ -91,7 +91,98 @@ class LazyTensor(ABC):
         """
         raise NotImplementedError("The class {} requires a _matmul function!".format(self.__class__.__name__))
 
-    @abstractmethod
+    def _mul_constant(self, other):
+        """
+        Multiplies the LazyTensor by a costant.
+
+        ..note::
+            This method is used internally by the related function :func:`~gpytorch.lazy.LazyTensor.mul`,
+            which does some additional work. Calling this method directly is discouraged.
+
+        Returns:
+            :obj:`gpytorch.lazy.LazyTensor`
+        """
+        from .constant_mul_lazy_tensor import ConstantMulLazyTensor
+        return ConstantMulLazyTensor(self, other)
+
+    def _mul_matrix(self, other):
+        """
+        Multiplies the LazyTensor by a (batch of) matrices.
+
+        ..note::
+            This method is used internally by the related function :func:`~gpytorch.lazy.LazyTensor.mul`,
+            which does some additional work. Calling this method directly is discouraged.
+
+        Returns:
+            :obj:`gpytorch.lazy.LazyTensor`
+        """
+        from .mul_lazy_tensor import MulLazyTensor
+        return MulLazyTensor(self, other)
+
+    def _probe_vectors_and_norms(self):
+        return None, None
+
+    def _prod_batch(self, dim):
+        """
+        Multiply the LazyTensor across a batch dimension (supplied as a positive number).
+
+        ..note::
+            This method is used internally by the related function :func:`~gpytorch.lazy.LazyTensor.prod`,
+            which does some additional work. Calling this method directly is discouraged.
+
+        Returns:
+            :obj:`gpytorch.lazy.LazyTensor`
+        """
+        from .mul_lazy_tensor import MulLazyTensor
+        from .root_lazy_tensor import RootLazyTensor
+
+        if self.size(dim) == 1:
+            return self.squeeze(dim)
+
+        roots = self.root_decomposition().root.evaluate()
+        num_batch = roots.size(dim)
+
+        while True:
+            # Take care of extra roots (odd roots), if they exist
+            if num_batch % 2:
+                shape = list(roots.shape)
+                shape[dim] = 1
+                extra_root = (
+                    torch.randn(shape).mul_(1e-6 / math.sqrt(roots.size(dim))).add_(1.0 / math.sqrt(roots.size(dim)))
+                )
+                roots = torch.cat([roots, extra_root], dim)
+                num_batch += 1
+
+            # Divide and conqour
+            # Assumes that there's an even number of roots
+            part1_index = [_noop_index] * roots.dim()
+            part1_index[dim] = slice(None, num_batch // 2, None)
+            part1 = roots[tuple(part1_index)].contiguous()
+            part2_index = [_noop_index] * roots.dim()
+            part2_index[dim] = slice(num_batch // 2, None, None)
+            part2 = roots[tuple(part2_index)].contiguous()
+
+            if num_batch // 2 == 1:
+                part1 = part1.squeeze(dim)
+                part2 = part2.squeeze(dim)
+                res = MulLazyTensor(RootLazyTensor(part1), RootLazyTensor(part2))
+                break
+            else:
+                roots = res.root_decomposition().root.evaluate()
+                num_batch = num_batch // 2
+
+        return res
+
+    def _solve(self, rhs, preconditioner, num_tridiag=None):
+        return linear_cg(
+            self._matmul,
+            rhs,
+            n_tridiag=num_tridiag,
+            max_iter=settings.max_cg_iterations.value(),
+            max_tridiag_iter=settings.max_lanczos_quadrature_iterations.value(),
+            preconditioner=preconditioner
+        )
+
     def _size(self):
         """
         Returns the size of the resulting Tensor that the lazy tensor represents.
@@ -1049,7 +1140,7 @@ class LazyTensor(ABC):
         for arg in self._args:
             if torch.is_tensor(arg):
                 representation.append(arg)
-            elif isinstance(arg, LazyTensor):
+            elif hasattr(arg, "representation") and callable(arg.representation):  # Is it a LazyTensor?
                 representation += list(arg.representation())
             else:
                 raise RuntimeError("Representation of a LazyTensor should consist only of Tensors")
