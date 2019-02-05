@@ -230,6 +230,10 @@ class LazyTensor(object):
     def __init__(self, *args, **kwargs):
         self._args = args
         self._kwargs = kwargs
+        if settings.debug.on():
+            err = self._check_args(*args, **kwargs)
+            if err is not None:
+                raise ValueError(err)
 
     @property
     def _args(self):
@@ -253,6 +257,15 @@ class LazyTensor(object):
             tensor: - the diagonal (or batch of diagonals)
         """
         return self.diag()
+
+    def _check_args(self, *args, **kwargs):
+        """
+        (Optional) run checks to see that input arguments and kwargs are valid
+
+        Return:
+            None (if all checks pass) or str (error message to raise)
+        """
+        return None
 
     def _expand_batch(self, batch_shape):
         """
