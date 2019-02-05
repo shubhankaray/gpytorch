@@ -793,8 +793,6 @@ class LazyTensor(object):
             device=self.device,
             inv_quad=(inv_quad_rhs is not None),
             logdet=logdet,
-            preconditioner=self._preconditioner()[0],
-            logdet_correction=self._preconditioner()[1],
             probe_vectors=probe_vectors,
             probe_vector_norms=probe_vector_norms,
         )(*args)
