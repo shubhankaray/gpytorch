@@ -2,22 +2,34 @@
 
 import torch
 
-from .. import settings
-from ..utils.memoize import cached
+from .. import settings, beta_features
+from ..utils.memoize import cached, is_cached
 from ..utils.getitem import _noop_index
 from .lazy_tensor import LazyTensor
-from .lazy_tensor_representation_tree import LazyTensorRepresentationTree
 from .non_lazy_tensor import lazify
 
 
-LAZY_KERNEL_TENSOR_WARNING = (
-    "A LazyEvaluatedKernelTensor is not intended to be used directly as a tensor! Call evaluate() first."
-)
-
-
 class LazyEvaluatedKernelTensor(LazyTensor):
-    def __init__(self, kernel, x1, x2, batch_dims=None, **params):
-        super(LazyEvaluatedKernelTensor, self).__init__(kernel, x1, x2, **params)
+    def _check_args(self, x1, x2, kernel, batch_dims=None, **params):
+        from ..kernels.kernel import Kernel
+
+        if not torch.is_tensor(x1):
+            return "x1 must be a tensor. Got {}".format(x1.__class__.__name__)
+        if not torch.is_tensor(x2):
+            return "x1 must be a tensor. Got {}".format(x1.__class__.__name__)
+
+        if x1.dim() != x2.dim():
+            return "x1 ({}) and x2 ({}) must have the same dimensionality.".format(x1.shape, x2.shape)
+        if x1.shape[:-2] != x2.shape[:-2] or x1.size(-1) != x2.size(-1):
+            return "x1 ({}) and x2 ({}) have incompatible sizes.".format(x1.shape, x2.shape)
+
+        if not isinstance(kernel, Kernel):
+            return "kernel must be a gpytorch.kernel.Kernel, got {}.".format(kernel.__class__.__name__)
+
+        return None
+
+    def __init__(self, x1, x2, kernel, batch_dims=None, **params):
+        super(LazyEvaluatedKernelTensor, self).__init__(x1, x2, kernel=kernel, batch_dims=batch_dims, **params)
         self.kernel = kernel
         self.x1 = x1
         self.x2 = x2
@@ -33,9 +45,14 @@ class LazyEvaluatedKernelTensor(LazyTensor):
         return self.x1.device
 
     def _expand_batch(self, batch_shape):
+        print("expand batch evaluation")
         return self.evaluate_kernel()._expand_batch(batch_shape)
 
     def _getitem(self, row_col_are_absorbed, row_index, col_index, *batch_indices):
+        if row_col_are_absorbed:
+            print("getitem evaluation")
+            return self.evaluate_kernel()._getitem(row_col_are_absorbed, row_index, col_index, *batch_indices)
+
         x1 = self.x1
         if self.batch_dims == (0, 2):
             x1 = x1.permute(0, 2, 1).contiguous()
@@ -47,15 +64,60 @@ class LazyEvaluatedKernelTensor(LazyTensor):
             x2 = x2.view(-1, x2.size(-1), 1)
         x2 = x2[(*batch_indices, col_index, _noop_index)]
 
-        return LazyEvaluatedKernelTensor(
-            self.kernel, x1, x2, **self.params
+        return self.__class__(
+            x1, x2, kernel=self.kernel, batch_dims=self.batch_dims, **self.params
         )
 
     def _matmul(self, rhs):
-        raise RuntimeError(LAZY_KERNEL_TENSOR_WARNING)
+        # This _matmul is defined computes the kernel in chunks
+        # It is only used when we are using kernel checkpointing
+        # It won't be called if checkpointing is off
+        split_size = beta_features.checkpoint_kernel.value()
+        if not split_size:
+            raise RuntimeError(
+                "Should not have ended up in LazyEvaluatedKernelTensor._matmul without kernel checkpointing. "
+                "This is probably a bug in GPyTorch."
+            )
+
+        with torch.no_grad(), settings.lazily_evaluate_kernels(False):
+            sub_x1s = torch.split(self.x1, split_size, dim=-2)
+            res = []
+            for sub_x1 in sub_x1s:
+                sub_kernel_matrix = lazify(
+                    self.kernel(sub_x1, self.x2, diag=False, batch_dims=self.batch_dims, **self.params)
+                )
+                res.append(sub_kernel_matrix._matmul(rhs))
+
+            return torch.cat(res, dim=-2)
 
     def _quad_form_derivative(self, left_vecs, right_vecs):
-        raise RuntimeError(LAZY_KERNEL_TENSOR_WARNING)
+        # This _quad_form_derivative computes the kernel in chunks
+        # It is only used when we are using kernel checkpointing
+        # It won't be called if checkpointing is off
+        split_size = beta_features.checkpoint_kernel.value()
+        if not split_size:
+            raise RuntimeError(
+                "Should not have ended up in LazyEvaluatedKernelTensor._quad_form_derivative without kernel "
+                "checkpointing. This is probably a bug in GPyTorch."
+            )
+
+        x1 = self.x1.detach()
+        x2 = self.x2.detach()
+
+        # Break objects into chunks
+        sub_x1s = torch.split(x1, split_size, dim=-2)
+        sub_left_vecss = torch.split(left_vecs, split_size, dim=-2)
+        # Compute the gradient in chunks
+        for sub_x1, sub_left_vecs in zip(sub_x1s, sub_left_vecss):
+            with torch.enable_grad(), settings.lazily_evaluate_kernels(False):
+                sub_kernel_matrix = lazify(
+                    self.kernel(sub_x1, self.x2, diag=False, batch_dims=self.batch_dims, **self.params)
+                )
+            sub_grad_outputs = tuple(sub_kernel_matrix._quad_form_derivative(sub_left_vecs, right_vecs))
+            sub_kernel_outputs = tuple(sub_kernel_matrix.representation())
+            torch.autograd.backward(sub_kernel_outputs, sub_grad_outputs)
+
+        return x1.grad, x2.grad
 
     def _size(self):
         size = self.kernel.size(self.x1, self.x2)
@@ -67,14 +129,17 @@ class LazyEvaluatedKernelTensor(LazyTensor):
         return size
 
     def _transpose_nonbatch(self):
-        return self.__class__(self.kernel, self.x2, self.x1, **self.params)
-
-    def _t_matmul(self, rhs):
-        raise RuntimeError(LAZY_KERNEL_TENSOR_WARNING)
+        return self.__class__(self.x2, self.x1, kernel=self.kernel, batch_dims=self.batch_dims, **self.params)
 
     def _unsqueeze_batch(self, dim):
+        print("unsqueezing batch")
         return self.evaluate_kernel()._unsqueeze_batch(dim)
 
+    def add_jitter(self, jitter_val=1e-3):
+        print("adding jitter")
+        return self.evaluate_kernel().add_jitter(jitter_val)
+
+    @cached(name="kernel_diag")
     def diag(self):
         """
         Getting the diagonal of a kernel can be handled more efficiently by
@@ -84,10 +149,9 @@ class LazyEvaluatedKernelTensor(LazyTensor):
         """
         from ..kernels import Kernel
 
-        if hasattr(self, "_cached_kernel_diag"):
-            return self._cached_kernel_diag
-        elif hasattr(self, "_cached_kernel_eval"):
-            return self._cached_kernel_eval.diag()
+        if is_cached(self, "kernel_eval"):
+            print("\n\nWOO FREE KERNEL DIAG\n\n")
+            return self.evaluate_kernel().diag()
         else:
             x1 = self.x1
             x2 = self.x2
@@ -145,27 +209,21 @@ class LazyEvaluatedKernelTensor(LazyTensor):
             self._cached_kernel_diag = res.view(self.shape[:-1]).contiguous()
             return self._cached_kernel_diag
 
+    @cached(name="kernel_eval")
     def evaluate_kernel(self):
         """
         NB: This is a meta LazyTensor, in the sense that evaluate can return
         a LazyTensor if the kernel being evaluated does so.
         """
-        if hasattr(self, "_cached_kernel_eval"):
-            return self._cached_kernel_eval
-        else:
-            x1 = self.x1
-            x2 = self.x2
-
-            with settings.lazily_evaluate_kernels(False):
-                self._cached_kernel_eval = self.kernel(
-                    x1, x2, diag=False, batch_dims=self.batch_dims, **self.params
-                )
-
-            self._cached_kernel_eval = lazify(self._cached_kernel_eval)
-            return self._cached_kernel_eval
+        print("> > evaluate kernel call", self.shape)
+        with settings.lazily_evaluate_kernels(False):
+            return lazify(
+                self.kernel(self.x1, self.x2, diag=False, batch_dims=self.batch_dims, **self.params)
+            )
 
     @cached
     def evaluate(self):
+        print("evaluate evaluating kernel")
         return self.evaluate_kernel().evaluate()
 
     def repeat(self, *repeats):
@@ -175,10 +233,24 @@ class LazyEvaluatedKernelTensor(LazyTensor):
 
         x1 = self.x1.repeat(*batch_repeat, row_repeat, 1)
         x2 = self.x2.repeat(*batch_repeat, col_repeat, 1)
-        return LazyEvaluatedKernelTensor(self.kernel, x1, x2, **self.params)
+        return self.__class__(x1, x2, kernel=self.kernel, batch_dims=self.batch_dims, **self.params)
 
     def representation(self):
-        return self.evaluate_kernel().representation()
+        # If we're checkpointing the kernel, we'll use chunked _matmuls defined in LazyEvaluatedKernelTensor
+        if beta_features.checkpoint_kernel.value():
+            return super().representation()
+        # Otherwise, we'll evaluate the kernel (or at least its LazyTensor representation) and use its
+        # representation
+        else:
+            print("evaluating for the representation")
+            return self.evaluate_kernel().representation()
 
     def representation_tree(self):
-        return LazyTensorRepresentationTree(self.evaluate_kernel())
+        # If we're checkpointing the kernel, we'll use chunked _matmuls defined in LazyEvaluatedKernelTensor
+        if beta_features.checkpoint_kernel.value():
+            return super().representation_tree()
+        # Otherwise, we'll evaluate the kernel (or at least its LazyTensor representation) and use its
+        # representation
+        else:
+            print("evaluating for the representation tree")
+            return self.evaluate_kernel().representation_tree()

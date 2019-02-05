@@ -107,7 +107,7 @@ class LazyTensor(object):
             :obj:`gpytorch.lazy.LazyTensor`
         """
         from .mul_lazy_tensor import MulLazyTensor
-        return MulLazyTensor(self, other).evaluate_kernel()
+        return MulLazyTensor(self, other)
 
     def _probe_vectors_and_norms(self):
         return None, None
@@ -988,7 +988,7 @@ class LazyTensor(object):
         for arg in self._args:
             if torch.is_tensor(arg):
                 representation.append(arg)
-            elif isinstance(arg, LazyTensor):
+            elif hasattr(arg, "representation") and callable(arg.representation):  # Is it a LazyTensor?
                 representation += list(arg.representation())
             else:
                 raise RuntimeError("Representation of a LazyTensor should consist only of Tensors")
