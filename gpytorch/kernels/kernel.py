@@ -21,7 +21,7 @@ class Distance(torch.jit.ScriptModule):
         self._postprocess = postprocess_script
 
     @torch.jit.script_method
-    def _jit_sq_dist(self, x1, x2, diag, x1_eq_x2):
+    def _jit_sq_dist(self, x1, x2, x1_eq_x2):
         # Compute squared distance matrix using quadratic expansion
         x1_norm = x1.pow(2).sum(dim=-1, keepdim=True)
         if bool(x1_eq_x2):
@@ -42,8 +42,8 @@ class Distance(torch.jit.ScriptModule):
         return self._postprocess(res)
 
     @torch.jit.script_method
-    def _jit_dist(self, x1, x2, diag, x1_eq_x2):
-        res = self._jit_sq_dist(x1, x2, diag, x1_eq_x2)
+    def _jit_dist(self, x1, x2, x1_eq_x2):
+        res = self._jit_sq_dist(x1, x2, x1_eq_x2)
         res = res.clamp_min_(1e-30).sqrt_()
         return self._postprocess(res)
 
@@ -293,9 +293,9 @@ class Kernel(Module):
 
             res = dist_postprocess_func(res)
         elif not square_dist:
-            res = self.distance_module._jit_dist(x1, x2, torch.tensor(diag), torch.tensor(x1_eq_x2))
+            res = self.distance_module._jit_dist(x1, x2, torch.tensor(x1_eq_x2))
         else:
-            res = self.distance_module._jit_sq_dist(x1, x2, torch.tensor(diag), torch.tensor(x1_eq_x2))
+            res = self.distance_module._jit_sq_dist(x1, x2, torch.tensor(x1_eq_x2))
 
         if batch_dims == (0, 2):
             if diag:

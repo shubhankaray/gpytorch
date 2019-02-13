@@ -6,6 +6,7 @@ from ._dsmm import DSMM
 from ._normal_cdf import NormalCDF
 from ._log_normal_cdf import LogNormalCDF
 from ..utils.deprecation import _deprecated_function_for
+from .rbf_covariance import RBFCovariance
 
 
 def add_diag(input, diag):
@@ -196,6 +197,7 @@ inv_quad_log_det = _deprecated_function_for("inv_quad_log_det", inv_quad_logdet)
 
 
 __all__ = [
+    "RBFCovariance",
     "add_diag",
     "dsmm",
     "inv_matmul",
