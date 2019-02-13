@@ -19,8 +19,8 @@ class MaternCovariance(torch.autograd.Function):
         elif nu == 1.5:
             covar_mat = exp_component.mul_(1 + scaled_unitless_dist)
         elif nu == 2.5:
-            covar_mat = exp_component.mul_(1 + scaled_unitless_dist +
-                                           scaled_unitless_dist.pow(2).div(3))
+            covar_mat = exp_component.mul_(1 + scaled_unitless_dist
+                                           + scaled_unitless_dist.pow(2).div(3))
         nu = torch.tensor(nu)
         ctx.save_for_backward(scaled_unitless_dist, lengthscale, nu)
         return covar_mat
