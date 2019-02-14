@@ -6,8 +6,8 @@ class MaternCovariance(torch.autograd.Function):
     @staticmethod
     def forward(ctx, x1, x2, lengthscale, nu, dist_func):
         # Subtract mean for numerical stability. Won't affect computations
-        # because covariance matrix is stationary
-        mean = x1.contiguous().view(-1, 1, x1.size(-1)).mean(0, keepdim=True)
+        # because covariance matrix is stationary.
+        mean = x1.contiguous().view(-1, x1.size(-1)).mean(0)[(None,) * (x1.dim() - 1)]
         x1_ = (x1 - mean).div(lengthscale)
         x2_ = (x2 - mean).div(lengthscale)
         scaled_unitless_dist = dist_func(x1_, x2_).mul_(math.sqrt(2 * nu))
